@@ -15,5 +15,12 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/astblock"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
