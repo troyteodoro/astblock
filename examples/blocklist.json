@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "module": "shop.checkout",
+      "fingerprint": "ebfa39018db86a24",
+      "action": "skip",
+      "reason": "Partner API outage, INC-2231"
+    }
+  ]
+}
