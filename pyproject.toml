@@ -4,22 +4,41 @@ build-backend = "hatchling.build"
 
 [project]
 name = "astblock"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Block individual Python statements from running, using an AST-fingerprint blocklist."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+authors = [{ name = "Troy Teodoro", email = "troyteodoro00@gmail.com" }]
+keywords = ["ast", "import-hook", "incident-response", "mitigation", "feature-flag"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Debuggers",
     "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/troyteodoro/astblock"
+Source = "https://github.com/troyteodoro/astblock"
+Issues = "https://github.com/troyteodoro/astblock/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
 
 [project.scripts]
 astblock = "astblock.__main__:main"
+
+[tool.hatch.version]
+path = "src/astblock/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/astblock"]
