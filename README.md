@@ -83,17 +83,30 @@ production: AST shapes occasionally change between versions.
 `action` is `"raise"` (the default) or `"skip"`. Scripts run directly use the
 module name `__main__`; code run with `-m pkg.mod` uses `pkg.mod`.
 
-`strict` (default `false`) decides what happens when a rule matches no
-statement, which means the code changed after the rule was written. By
-default that is a logged warning and the statement runs. Under `strict` it
-raises `StaleRuleError` at import and the process does not start. **Prefer
-`strict` during an incident:** a rule that silently stopped working is the
-one failure this tool cannot afford, and a process that refuses to start is
-easier to notice than one quietly running the statement you meant to block.
+`strict` (default `false`) decides what happens to a rule that does not fire.
+By default that is a logged warning and the statement runs. Under `strict`
+the process refuses to start. **Prefer `strict` during an incident:** a rule
+that silently stopped working is the one failure this tool cannot afford, and
+a process that will not start is easier to notice than one quietly running the
+statement you meant to block.
 
-A `reason` is at most 200 characters and may not contain control characters,
-because it is copied into log records. A blocklist file is limited to 1 MiB
-and 10,000 rules.
+`strict` is enforced at two moments, because they catch different mistakes:
+
+- **At `install()`**, every rule is checked against the source it names,
+  without importing it. This catches a rule whose module is misspelled or no
+  longer exists, which the import-time check never would: a module that is
+  never imported never reaches it.
+- **At import**, a rule that matches no statement in a module being compiled
+  raises `StaleRuleError`. This catches code that changed after the rule was
+  written.
+
+Rules for `__main__` are skipped by the first check, since a script's module
+name says nothing about where the file is, and caught by the second.
+
+A `module` must be a dotted module name and a `reason` is at most 200
+characters with no control characters, because both are echoed by
+`astblock check` and written to log records. A blocklist file is limited to
+1 MiB and 10,000 rules.
 
 ## Semantics and limits: read before using in an incident
 
@@ -119,7 +132,9 @@ so the file and the `ASTBLOCK_FILE` variable deserve the same protection as
 your deploy credentials.
 
 - A **world-writable** blocklist is refused outright. A group-writable one
-  loads with a warning naming the group.
+  loads with a warning naming the group. A blocklist in a world-writable
+  directory without the sticky bit also warns, because anyone can replace a
+  file in such a directory whatever the file's own mode says.
 - `ASTBLOCK_FILE` is read from the ambient environment. If you use the
   `.pth` activation, *every* Python process in that environment honours it,
   so anyone who can set that variable for a more privileged process can

@@ -16,6 +16,8 @@ import sys
 from types import CodeType
 
 from ._blocklist import Blocklist
+from ._errors import StaleRuleError
+from ._resolve import verify
 from ._transform import compile_with_blocklist
 
 logger = logging.getLogger("astblock")
@@ -87,9 +89,40 @@ def install(blocklist: Blocklist | str | os.PathLike[str]) -> Blocklist:
         logger.warning(
             "astblock: already imported, rules won't apply to these until the "
             "process restarts: %s", ", ".join(already))
+    _verify_rules_resolve(blocklist)
     _finder = _BlockingFinder(blocklist)
     sys.meta_path.insert(0, _finder)
     return blocklist
+
+
+def _verify_rules_resolve(blocklist: Blocklist) -> None:
+    """Report rules that will never fire, before the program starts.
+
+    The compile-time stale check only sees modules that are actually
+    imported, so a rule naming a module that is never imported -- a typo in
+    the module name, most often -- would do nothing at all and say nothing.
+    That is the one outcome a strict blocklist exists to prevent, so verify
+    up front: warn always, and refuse to install when strict.
+    """
+    problems = [result for result in verify(blocklist) if result.is_problem]
+    if not problems:
+        return
+    for result in problems:
+        logger.warning(
+            "astblock: rule for %s%s will never fire: %s", result.module,
+            f" {result.fingerprint}" if result.fingerprint else "", result.detail,
+        )
+    if blocklist.strict:
+        detail = "; ".join(
+            f"{result.module}"
+            f"{' ' + result.fingerprint if result.fingerprint else ''}: {result.detail}"
+            for result in problems
+        )
+        raise StaleRuleError(
+            ", ".join(sorted({result.module for result in problems})),
+            [result.fingerprint for result in problems if result.fingerprint],
+            f"{len(problems)} rule(s) in this blocklist will never fire: {detail}",
+        )
 
 
 def uninstall() -> None:

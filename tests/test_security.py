@@ -203,3 +203,108 @@ def test_two_blocking_finders_do_not_recurse(tmp_path, monkeypatch):
         assert victim.VALUE == 1
     finally:
         sys.modules.pop("victim", None)
+
+
+# -- a module name cannot forge output either -----------------------------
+
+@pytest.mark.parametrize("module", [
+    "ghost\nOK       payments.core 1111111111111111 [skip] line 42: charge()",
+    "has space",
+    "../../etc/passwd",
+    "1leading_digit",
+    "dotted..twice",
+    "trailing.",
+    "esc\x1b[2K",
+])
+def test_invalid_module_names_are_rejected(module):
+    with pytest.raises(BlocklistError, match="dotted module name"):
+        Rule(module, "a" * 16, "skip")
+
+
+@pytest.mark.parametrize("module", ["m", "pkg.sub", "__main__", "a.b.c.d"])
+def test_valid_module_names_are_accepted(module):
+    assert Rule(module, "a" * 16, "skip").module == module
+
+
+def test_module_name_length_is_capped():
+    with pytest.raises(BlocklistError, match="at most 256 characters"):
+        Rule("a" * 257, "a" * 16, "skip")
+
+
+def test_check_output_cannot_be_forged_through_a_module_name(tmp_path):
+    forged = "ghost\nOK       payments.core 1111111111111111 [skip] line 42: charge()"
+    path = tmp_path / "bl.json"
+    path.write_text(json.dumps(
+        {"version": 1, "rules": [{"module": forged, "fingerprint": "a" * 16}]}))
+    result = cli("check", str(path), cwd=tmp_path, extra_path=tmp_path)
+    assert result.returncode == 2
+    assert "dotted module name" in result.stderr
+    assert "OK       payments.core" not in result.stdout
+
+
+# -- terminal escapes in quoted source are stripped -----------------------
+
+def test_source_text_with_escapes_is_not_printed_raw(tmp_path):
+    write(tmp_path / "sneaky.py", 'x = "\x1b[2K\x1b[1Gall clear"\n')
+    result = cli("list", "sneaky.py", cwd=tmp_path, extra_path=tmp_path)
+    assert result.returncode == 0
+    assert "\x1b" not in result.stdout
+
+
+# -- strict must not fail open on a module that is never imported ---------
+
+def test_strict_install_rejects_a_rule_for_a_module_that_does_not_exist(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    blocklist = Blocklist([Rule("typo.in.module.name", "a" * 16, "raise")], strict=True)
+    with pytest.raises(StaleRuleError, match="typo.in.module.name"):
+        astblock.install(blocklist)
+    assert not astblock.is_installed()
+
+
+def test_non_strict_install_only_warns_about_a_rule_that_cannot_fire(tmp_path, monkeypatch, caplog):
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        astblock.install(Blocklist([Rule("typo.in.module.name", "a" * 16, "raise")]))
+        assert "will never fire" in caplog.text
+    finally:
+        astblock.uninstall()
+
+
+def test_strict_install_rejects_a_fingerprint_that_matches_nothing(tmp_path, monkeypatch):
+    package = tmp_path / "realpkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    write(package / "work.py", "def go():\n    return 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    blocklist = Blocklist([Rule("realpkg.work", "0" * 16, "skip")], strict=True)
+    with pytest.raises(StaleRuleError):
+        astblock.install(blocklist)
+
+
+def test_strict_install_accepts_a_rule_that_does_match(tmp_path, monkeypatch):
+    package = tmp_path / "goodpkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    source = "def go():\n    danger()\n    return 1\n"
+    write(package / "work.py", source)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    fingerprint = next(s.fingerprint for s in
+                       astblock.fingerprint_source(source, "goodpkg.work") if s.lineno == 2)
+    try:
+        astblock.install(Blocklist([Rule("goodpkg.work", fingerprint, "skip")], strict=True))
+        assert astblock.is_installed()
+        import importlib
+        assert importlib.import_module("goodpkg.work").go() == 1
+    finally:
+        astblock.uninstall()
+        for name in [n for n in sys.modules if n == "goodpkg" or n.startswith("goodpkg.")]:
+            del sys.modules[name]
+
+
+def test_strict_install_does_not_import_the_modules_it_verifies(package_with_side_effect, monkeypatch):
+    tmp_path = package_with_side_effect
+    monkeypatch.syspath_prepend(str(tmp_path))
+    blocklist = Blocklist([Rule("loud.billing", "0" * 16, "skip")], strict=True)
+    with pytest.raises(StaleRuleError):
+        astblock.install(blocklist)
+    assert not (tmp_path / "EXECUTED").exists()

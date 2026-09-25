@@ -16,13 +16,13 @@ class StaleRuleError(BlocklistError):
     statement they were trying to stop.
     """
 
-    def __init__(self, module: str, fingerprints: list[str]) -> None:
+    def __init__(self, module: str, fingerprints: list[str], message: str | None = None) -> None:
         self.module = module
         self.fingerprints = fingerprints
-        super().__init__(
+        super().__init__(message or (
             f"{len(fingerprints)} rule(s) for {module} matched no statement "
             f"(code changed since the rule was written?): {', '.join(fingerprints)}"
-        )
+        ))
 
 
 class BlockedStatementError(RuntimeError):

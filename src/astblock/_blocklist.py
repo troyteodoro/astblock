@@ -43,6 +43,7 @@ FILE_VERSION = 1
 MAX_FILE_BYTES = 1 << 20
 MAX_RULES = 10_000
 MAX_REASON_LENGTH = 200
+MAX_MODULE_LENGTH = 256
 
 _FINGERPRINT_RE = re.compile(rf"^[0-9a-f]{{{FINGERPRINT_LENGTH}}}$")
 _RULE_KEYS = {"module", "fingerprint", "action", "reason"}
@@ -70,6 +71,19 @@ class Rule:
     def __post_init__(self) -> None:
         if not isinstance(self.module, str) or not self.module:
             raise BlocklistError(f"rule module must be a non-empty string, got {self.module!r}")
+        if len(self.module) > MAX_MODULE_LENGTH:
+            raise BlocklistError(
+                f"rule module must be at most {MAX_MODULE_LENGTH} characters, "
+                f"got {len(self.module)}"
+            )
+        # A module name is echoed by `astblock check` and written to logs, so
+        # it must be a real dotted name and not, say, text containing a newline
+        # that forges a line of output. isidentifier() also rules out control
+        # characters, spaces and empty components.
+        if not all(part.isidentifier() for part in self.module.split(".")):
+            raise BlocklistError(
+                f"rule module must be a dotted module name, got {self.module!r}"
+            )
         if not isinstance(self.fingerprint, str) or not _FINGERPRINT_RE.match(self.fingerprint):
             raise BlocklistError(
                 f"rule fingerprint must be {FINGERPRINT_LENGTH} lowercase hex characters, "
@@ -232,4 +246,26 @@ def _check_file_mode(path: str | os.PathLike[str], info: os.stat_result) -> None
             "astblock: blocklist %s is group-writable (mode %04o), so any member of "
             "group %d can change which statements are blocked",
             os.fspath(path), mode, info.st_gid,
+        )
+    _check_directory_mode(path)
+
+
+def _check_directory_mode(path: str | os.PathLike[str]) -> None:
+    """Warn when the containing directory lets anyone replace the blocklist.
+
+    A correctly-moded file in a world-writable directory without the sticky
+    bit can simply be renamed away and replaced, so the permissions on the
+    file alone do not settle the question. This warns rather than refuses,
+    because a deploy that writes the file into a shared directory is a real
+    pattern and the file itself is still the thing being read.
+    """
+    parent = os.path.dirname(os.path.abspath(os.fspath(path))) or os.curdir
+    try:
+        mode = stat.S_IMODE(os.stat(parent).st_mode)
+    except OSError:
+        return
+    if mode & stat.S_IWOTH and not mode & stat.S_ISVTX:
+        logger.warning(
+            "astblock: directory %s is world-writable and not sticky (mode %04o), so "
+            "any user on this host could replace the blocklist in it", parent, mode,
         )

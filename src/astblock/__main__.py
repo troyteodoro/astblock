@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import argparse
 import builtins
-import importlib.machinery
-import importlib.util
 import json
 import os
+import re
 import runpy
 import sys
 import types
@@ -22,6 +21,7 @@ from ._blocklist import ACTIONS, Blocklist
 from ._errors import BlocklistError
 from ._fingerprint import fingerprint_source
 from ._hook import ENV_VAR, install
+from ._resolve import source_path_for, verify
 from ._transform import compile_with_blocklist
 
 
@@ -29,50 +29,17 @@ def _looks_like_path(target: str) -> bool:
     return target.endswith(".py") or os.sep in target or (os.altsep or os.sep) in target
 
 
-def _find_spec_without_importing(name: str):
-    """Locate ``name`` on sys.path without importing anything.
-
-    ``importlib.util.find_spec`` imports the parent packages of a dotted name,
-    which runs their ``__init__.py``. The commands that only read code must not
-    do that: ``check`` exists to inspect a blocklist that is not yet trusted,
-    and executing code named by that file would defeat the point of checking
-    it. PathFinder locates modules without executing them, so walk the dotted
-    name one component at a time, carrying each package's search locations
-    down to its child.
-    """
-    parts = name.split(".")
-    search_path = None  # None means "use sys.path"
-    spec = None
-    for position, _ in enumerate(parts):
-        dotted = ".".join(parts[: position + 1])
-        spec = importlib.machinery.PathFinder.find_spec(dotted, search_path)
-        if spec is None:
-            return None
-        if position < len(parts) - 1:
-            locations = spec.submodule_search_locations
-            if not locations:
-                return None  # a parent component is a module, not a package
-            search_path = list(locations)
-    return spec
-
-
 def _locate(target: str, module: str | None, allow_import: bool = False) -> tuple[str, str]:
     """Return (module_name, source_path) for a module name or a file path."""
     if _looks_like_path(target):
         return module or "__main__", target
-    spec = _find_spec_without_importing(target)
-    if spec is None and allow_import:
-        # Opt-in fallback for layouts only a custom meta path finder can
-        # resolve, such as a strict editable install. This imports the parent
-        # packages of `target`, so only use it on a blocklist you trust.
-        spec = importlib.util.find_spec(target)
-    if spec is None or not spec.origin or not spec.origin.endswith(".py"):
+    try:
+        return module or target, source_path_for(target, allow_import)
+    except LookupError as exc:
         raise LookupError(
-            f"cannot find Python source for module {target!r} without importing it; "
-            f"pass the path to the .py file instead, or --allow-import to let "
-            f"astblock import its parent packages"
-        )
-    return module or target, spec.origin
+            f"{exc}; pass the path to the .py file instead, or --allow-import "
+            f"to let astblock import its parent packages"
+        ) from None
 
 
 def _read(path: str) -> bytes:
@@ -80,8 +47,14 @@ def _read(path: str) -> bytes:
         return handle.read()
 
 
+_UNPRINTABLE_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]")
+
+
 def _first_line(source_lines: list[str], lineno: int, width: int = 60) -> str:
     text = source_lines[lineno - 1].strip() if 0 < lineno <= len(source_lines) else ""
+    # This goes straight to a terminal, and the file it came from is not
+    # necessarily one we control, so drop escape sequences and the like.
+    text = _UNPRINTABLE_RE.sub("?", text)
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
@@ -108,29 +81,33 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     blocklist = Blocklist.load(args.blocklist)
-    problems = 0
-    for name in sorted(blocklist.modules):
-        try:
-            module, path = (_locate(name, None, args.allow_import)
-                            if name != "__main__" else (None, None))
-        except (LookupError, ImportError) as exc:
-            print(f"MISSING  {name}: {exc}")
+    problems = missing = 0
+    lines_by_path: dict[str, list[str]] = {}
+
+    def lines_for(path: str) -> list[str]:
+        if path not in lines_by_path:
+            lines_by_path[path] = _read(path).decode("utf-8", errors="replace").splitlines()
+        return lines_by_path[path]
+
+    for result in verify(blocklist, args.allow_import):
+        if result.status == "skipped":
+            print(f"SKIP     {result.module}: {result.detail}")
+        elif result.status == "missing":
+            print(f"MISSING  {result.module}: {result.detail}")
+            missing += 1
             problems += 1
-            continue
-        if path is None:
-            print(f"SKIP     __main__: rules for scripts can't be checked by module name")
-            continue
-        source = _read(path)
-        lines = source.decode("utf-8", errors="replace").splitlines()
-        found = {s.fingerprint: s for s in fingerprint_source(source, module, path)}
-        for fingerprint, rule in blocklist.rules_for(name).items():
-            statement = found.get(fingerprint)
-            if statement is None:
-                print(f"STALE    {name} {fingerprint}: matches no statement")
-                problems += 1
-            else:
-                print(f"OK       {name} {fingerprint} [{rule.action}] line "
-                      f"{statement.lineno}: {_first_line(lines, statement.lineno)}")
+        elif result.status == "stale":
+            print(f"STALE    {result.module} {result.fingerprint}: {result.detail}")
+            problems += 1
+        else:
+            rule = blocklist.rules_for(result.module)[result.fingerprint]
+            statement = result.statement
+            text = _first_line(lines_for(result.path), statement.lineno)
+            print(f"OK       {result.module} {result.fingerprint} [{rule.action}] line "
+                  f"{statement.lineno}: {text}")
+    if missing and not args.allow_import:
+        print("note: modules are resolved without importing them; pass --allow-import "
+              "if a layout needs it", file=sys.stderr)
     return 1 if problems else 0
 
 
