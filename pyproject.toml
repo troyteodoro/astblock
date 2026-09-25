@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astblock"
+version = "0.1.0"
+description = "Block individual Python statements from running, using an AST-fingerprint blocklist."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: System :: Systems Administration",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/astblock"]
