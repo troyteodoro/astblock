@@ -3,6 +3,7 @@
 from ._blocklist import ACTIONS, Blocklist, Rule
 from ._errors import BlockedStatementError, BlocklistError
 from ._fingerprint import Statement, find_statements, fingerprint_source
+from ._hook import ENV_VAR, install, install_from_env, is_installed, uninstall
 from ._runtime import hits, reset_hits
 from ._transform import compile_with_blocklist
 
@@ -10,6 +11,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "ACTIONS",
+    "ENV_VAR",
     "BlockedStatementError",
     "Blocklist",
     "BlocklistError",
@@ -19,5 +21,9 @@ __all__ = [
     "find_statements",
     "fingerprint_source",
     "hits",
+    "install",
+    "install_from_env",
+    "is_installed",
     "reset_hits",
+    "uninstall",
 ]
