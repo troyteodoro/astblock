@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -28,13 +29,49 @@ def _looks_like_path(target: str) -> bool:
     return target.endswith(".py") or os.sep in target or (os.altsep or os.sep) in target
 
 
-def _locate(target: str, module: str | None) -> tuple[str, str]:
+def _find_spec_without_importing(name: str):
+    """Locate ``name`` on sys.path without importing anything.
+
+    ``importlib.util.find_spec`` imports the parent packages of a dotted name,
+    which runs their ``__init__.py``. The commands that only read code must not
+    do that: ``check`` exists to inspect a blocklist that is not yet trusted,
+    and executing code named by that file would defeat the point of checking
+    it. PathFinder locates modules without executing them, so walk the dotted
+    name one component at a time, carrying each package's search locations
+    down to its child.
+    """
+    parts = name.split(".")
+    search_path = None  # None means "use sys.path"
+    spec = None
+    for position, _ in enumerate(parts):
+        dotted = ".".join(parts[: position + 1])
+        spec = importlib.machinery.PathFinder.find_spec(dotted, search_path)
+        if spec is None:
+            return None
+        if position < len(parts) - 1:
+            locations = spec.submodule_search_locations
+            if not locations:
+                return None  # a parent component is a module, not a package
+            search_path = list(locations)
+    return spec
+
+
+def _locate(target: str, module: str | None, allow_import: bool = False) -> tuple[str, str]:
     """Return (module_name, source_path) for a module name or a file path."""
     if _looks_like_path(target):
         return module or "__main__", target
-    spec = importlib.util.find_spec(target)
+    spec = _find_spec_without_importing(target)
+    if spec is None and allow_import:
+        # Opt-in fallback for layouts only a custom meta path finder can
+        # resolve, such as a strict editable install. This imports the parent
+        # packages of `target`, so only use it on a blocklist you trust.
+        spec = importlib.util.find_spec(target)
     if spec is None or not spec.origin or not spec.origin.endswith(".py"):
-        raise LookupError(f"cannot find Python source for module {target!r}")
+        raise LookupError(
+            f"cannot find Python source for module {target!r} without importing it; "
+            f"pass the path to the .py file instead, or --allow-import to let "
+            f"astblock import its parent packages"
+        )
     return module or target, spec.origin
 
 
@@ -49,7 +86,7 @@ def _first_line(source_lines: list[str], lineno: int, width: int = 60) -> str:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    module, path = _locate(args.target, args.module)
+    module, path = _locate(args.target, args.module, args.allow_import)
     source = _read(path)
     statements = fingerprint_source(source, module, path)
     lines = source.decode("utf-8", errors="replace").splitlines()
@@ -74,7 +111,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     problems = 0
     for name in sorted(blocklist.modules):
         try:
-            module, path = _locate(name, None) if name != "__main__" else (None, None)
+            module, path = (_locate(name, None, args.allow_import)
+                            if name != "__main__" else (None, None))
         except (LookupError, ImportError) as exc:
             print(f"MISSING  {name}: {exc}")
             problems += 1
@@ -140,10 +178,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--json", action="store_true", help="print as blocklist JSON")
     p_list.add_argument("--action", choices=ACTIONS, default="raise",
                         help="action to use with --json (default: raise)")
+    p_list.add_argument("--allow-import", action="store_true",
+                        help="allow importing parent packages to resolve the module")
     p_list.set_defaults(func=cmd_list)
 
     p_check = sub.add_parser("check", help="verify every rule still matches the code")
     p_check.add_argument("blocklist")
+    p_check.add_argument("--allow-import", action="store_true",
+                         help="allow importing parent packages to resolve modules; "
+                              "only use this on a blocklist you trust")
     p_check.set_defaults(func=cmd_check)
 
     p_run = sub.add_parser("run", help="run a script or module with a blocklist applied")

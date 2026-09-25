@@ -36,6 +36,12 @@ class _BlockingLoader(importlib.machinery.SourceFileLoader):
 
 
 class _BlockingFinder(importlib.abc.MetaPathFinder):
+    # Recognised across module identities: if astblock is imported twice (a
+    # vendored copy alongside an installed one) the two _BlockingFinder
+    # classes are different objects, so isinstance would not see the other
+    # one. An attribute name is the same in both.
+    _astblock_finder = True
+
     def __init__(self, blocklist: Blocklist) -> None:
         self.blocklist = blocklist
 
@@ -44,7 +50,10 @@ class _BlockingFinder(importlib.abc.MetaPathFinder):
             return None
         spec = None
         for finder in sys.meta_path:
-            if finder is self or not hasattr(finder, "find_spec"):
+            # Skip every blocking finder, not just this one: two of them on
+            # sys.meta_path would otherwise call into each other until the
+            # stack ran out.
+            if getattr(finder, "_astblock_finder", False) or not hasattr(finder, "find_spec"):
                 continue
             spec = finder.find_spec(fullname, path, target)
             if spec is not None:
