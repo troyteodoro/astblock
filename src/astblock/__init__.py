@@ -1,13 +1,13 @@
 """astblock: block individual statements from running, using an AST-fingerprint blocklist."""
 
 from ._blocklist import ACTIONS, Blocklist, Rule
-from ._errors import BlockedStatementError, BlocklistError
+from ._errors import BlockedStatementError, BlocklistError, StaleRuleError
 from ._fingerprint import Statement, find_statements, fingerprint_source
 from ._hook import ENV_VAR, install, install_from_env, is_installed, uninstall
 from ._runtime import hits, reset_hits
 from ._transform import compile_with_blocklist
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ACTIONS",
@@ -17,6 +17,7 @@ __all__ = [
     "BlocklistError",
     "Rule",
     "Statement",
+    "StaleRuleError",
     "compile_with_blocklist",
     "find_statements",
     "fingerprint_source",

@@ -23,6 +23,7 @@ $ python -m astblock list shop.checkout --line 15
 $ python -m astblock list shop.checkout --line 15 --json --action skip > blocklist.json
 
 # 3. Verify every rule matches the code you're about to run
+#    (reads the source; does not import it)
 $ python -m astblock check blocklist.json
 OK       shop.checkout ebfa39018db86a24 [skip] line 15: notify_partner_api(order)
 
@@ -67,6 +68,7 @@ production: AST shapes occasionally change between versions.
 ```json
 {
   "version": 1,
+  "strict": true,
   "rules": [
     {
       "module": "shop.checkout",
@@ -80,6 +82,18 @@ production: AST shapes occasionally change between versions.
 
 `action` is `"raise"` (the default) or `"skip"`. Scripts run directly use the
 module name `__main__`; code run with `-m pkg.mod` uses `pkg.mod`.
+
+`strict` (default `false`) decides what happens when a rule matches no
+statement, which means the code changed after the rule was written. By
+default that is a logged warning and the statement runs. Under `strict` it
+raises `StaleRuleError` at import and the process does not start. **Prefer
+`strict` during an incident:** a rule that silently stopped working is the
+one failure this tool cannot afford, and a process that refuses to start is
+easier to notice than one quietly running the statement you meant to block.
+
+A `reason` is at most 200 characters and may not contain control characters,
+because it is copied into log records. A blocklist file is limited to 1 MiB
+and 10,000 rules.
 
 ## Semantics and limits: read before using in an incident
 
@@ -97,9 +111,28 @@ module name `__main__`; code run with `-m pkg.mod` uses `pkg.mod`.
   never cached, so a stale `.pyc` can't bypass a rule.
 - Hits are logged to the `astblock` logger (first hit at WARNING, later hits at
   DEBUG) and counted in `astblock.hits()`.
-- **Security:** whoever can write the blocklist can disable any statement,
-  including an authorization check. Treat the file and the `ASTBLOCK_FILE`
-  variable with the same care as your deploy credentials.
+
+## Security
+
+Whoever can write the blocklist decides which statements in your program run,
+so the file and the `ASTBLOCK_FILE` variable deserve the same protection as
+your deploy credentials.
+
+- A **world-writable** blocklist is refused outright. A group-writable one
+  loads with a warning naming the group.
+- `ASTBLOCK_FILE` is read from the ambient environment. If you use the
+  `.pth` activation, *every* Python process in that environment honours it,
+  so anyone who can set that variable for a more privileged process can
+  disable that process's checks. Prefer the CLI wrapper or an explicit
+  `install()` call where you can.
+- `astblock list` and `astblock check` **do not import** the modules they
+  name, so checking a blocklist someone handed you does not run their code.
+  Resolution falls back to importing only if you pass `--allow-import`.
+- Blocking is not a safe default for security-relevant code. Do not block
+  an authorization check, a lock acquisition, or a statement whose result is
+  consumed inside a `try`. A skipped assignment leaves the name undefined,
+  and the resulting `NameError` swallowed by a broad `except` can turn a
+  denial into an approval.
 
 ## Python API
 

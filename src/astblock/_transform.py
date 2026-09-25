@@ -8,6 +8,7 @@ from types import CodeType
 from typing import Mapping
 
 from ._blocklist import Blocklist, Rule
+from ._errors import StaleRuleError
 from ._fingerprint import find_statements
 
 logger = logging.getLogger("astblock")
@@ -70,6 +71,12 @@ def compile_with_blocklist(
                            len(matched), module, ", ".join(sorted(matched)))
         stale = sorted(set(rules) - matched)
         if stale:
+            # A stale rule means a statement someone asked to block is about to
+            # run. Under a strict blocklist that is fatal, on the same reasoning
+            # that a missing blocklist file is: running unpatched after an
+            # emergency patch was requested is worse than failing to start.
+            if blocklist.strict:
+                raise StaleRuleError(module, stale)
             logger.warning(
                 "astblock: %d rule(s) for %s matched nothing (code changed since the "
                 "rule was written?): %s", len(stale), module, ", ".join(stale))
